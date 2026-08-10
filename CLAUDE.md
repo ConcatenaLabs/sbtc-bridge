@@ -1,0 +1,82 @@
+# sbtc-bridge
+
+An independent, application-level BTC ⇄ SBTC custody bridge for Sequentia: lock BTC in an N-of-M
+operator multisig on Bitcoin testnet4, reissue SBTC 1:1 on Sequentia, and burn SBTC on the way
+back.
+
+It is **not** Elements' consensus peg and needs no consensus change. It is a **trusted** bridge:
+a BTC peg cannot be trustless without Bitcoin covenants. `README.md` says so plainly and should
+keep saying so.
+
+Native BTC remains the privileged asset everywhere. SBTC is an ordinary, unprivileged, reissuable
+Sequentia asset — a narrow wrapper for the two use cases in the design document, not a replacement
+for BTC. Node and consensus conventions live in the
+[`Sequentia`](https://github.com/GracedEternalKingCabbageMan/Sequentia) repo.
+
+## Shape
+
+One Node ES module, `bridge.mjs`, with no runtime dependencies. It orchestrates two node wallets
+over RPC and hand-rolls no crypto: the Sequentia node signs the reissuance and send, and bitcoind
+(holding the reserve multisig descriptor) signs the release via PSBT.
+
+```sh
+cp config.example.json config.json     # then fill it in
+npm start        # node bridge.mjs
+npm run check    # node --check bridge.mjs
+npm test         # node --test 'test/**/*.test.mjs'
+```
+
+`setup-sbtc.mjs` is the one-time setup: it builds the reserve multisig, issues SBTC, and writes
+the config. There is no CI, so `npm test` before every PR is the whole gate.
+
+## The supply invariant
+
+SBTC is minted only against a confirmed BTC deposit and burned on peg-out, so total SBTC supply
+always equals the reserve BTC. Every rule below exists to protect that one equation.
+
+## Two failure classes that were closed deliberately
+
+Both are covered by the tests in `test/`. If you change the credit or release paths, keep them
+green and extend them.
+
+**Ambiguous failure after broadcast.** An error thrown *after* a credit or release has been
+broadcast must never delete the done-sentinel — an RPC timeout would otherwise double-mint SBTC or
+double-release reserve BTC on retry. The bridge verifies on chain before any retry: peg-in sends
+are comment-marked, and a peg-out's decoded txid and inputs are persisted **before**
+`sendrawtransaction`. On boot it reconciles placeholder-done entries from chain state, so a
+mid-operation crash cannot permanently wedge a peg either.
+
+**Peg-in/peg-out cannibalization.** Both flows draw from one wallet, so a peg-in credit could spend
+the returned-SBTC UTXO of a confirmed-but-unreleased peg-out and silently drop that peg-out. Owed
+returns are now earmarked — via `listunspent` with `include_unsafe`, so 0-conf returns count — then
+`lockunspent`'d out of coin selection and subtracted from the recyclable float **immediately before
+each credit's send**, not once per loop. A blind earmark scan fails that credit closed rather than
+minting.
+
+The recurring shape of both: **fail closed, verify against the chain rather than against local
+state, and never widen the window between a check and the send it protects.**
+
+## Other things already settled
+
+- Sequentia fees are paid in a configured ordinary asset under the open fee market, never in the
+  Sequence token by default.
+- RPC credentials go in the `Authorization` header, not in the URL — Node's `fetch` does not accept
+  them inline.
+
+## Secrets
+
+`config.json`, `state.json` and `*.log` are gitignored. `config.example.json` is the template and
+carries only placeholders — keep real RPC credentials, the bearer token, the multisig descriptor
+and the asset id out of it. The repository is public.
+
+## Working in this repo
+
+- **Commit author:**
+  `GracedEternalKingCabbageMan <151803062+GracedEternalKingCabbageMan@users.noreply.github.com>`
+- **Always open a pull request, then merge it yourself immediately.** The PR exists so the change
+  and its reasoning are recorded, not because anyone is waiting to review it. There is no review
+  process. If you are ever told to leave one specific PR open, that applies to that PR only and
+  never becomes the default.
+- PRs go against `master`, which is the remote default.
+- **Deployment is pull-only.** The server pulls this repo from GitHub. Never edit source on the
+  server and never copy source or binaries onto it.
