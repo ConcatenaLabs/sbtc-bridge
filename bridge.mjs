@@ -415,8 +415,20 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, sbtc_address: await newPegoutAddress(String(b.btc_dest)) });
     }
     if (req.method === 'GET' && url.pathname === '/status') {
-      let reserve = null, supply = null;
+      let reserve = null, supply = null, reserveAddrs = null;
       try { reserve = (await btcrpc('getbalances', [])).mine.trusted; } catch {}
+      try {
+        // The balance alone is a claim. The addresses holding it are checkable
+        // by anyone against a block explorer, which is the difference between
+        // publishing a reserve and asserting one. Consolidated per address
+        // because the reserve is spread over several outputs.
+        const per = new Map();
+        for (const u of await btcrpc('listunspent', [])) {
+          per.set(u.address, (per.get(u.address) ?? 0) + u.amount);
+        }
+        reserveAddrs = [...per].map(([address, amount_btc]) => ({ address, amount_btc }))
+          .sort((a, b) => b.amount_btc - a.amount_btc);
+      } catch {}
       try { const bal = await seqrpc('getbalance', []); supply = bal[SEQ.sbtc_asset] ?? null; } catch {}
       // Name the asset the reserve backs. Anyone publishing proof of reserves
       // needs both halves of the comparison, and a reserve figure on its own
@@ -426,7 +438,12 @@ const server = http.createServer(async (req, res) => {
       // chain reset, and would report it as fully backed.
       return send(res, 200, { ok: true, pegins: Object.keys(STATE.pegins).length, pegouts: Object.keys(STATE.pegouts).length,
         processed: Object.keys(STATE.done).length, reserve_btc: reserve, bridge_sbtc_balance: supply,
-        sbtc_asset: SEQ.sbtc_asset ?? null });
+        sbtc_asset: SEQ.sbtc_asset ?? null, reserve_addresses: reserveAddrs,
+        // What actually guards the reserve, in the operator's own words. A UI
+        // that describes this as a multisig when it is a single key overstates
+        // the custody its users are trusting, so the description is published
+        // rather than assumed.
+        reserve_custody: BTC.multisig_desc ?? null });
     }
     return send(res, 404, { ok: false, error: 'not found' });
   } catch (e) { send(res, 500, { ok: false, error: e.message }); }
