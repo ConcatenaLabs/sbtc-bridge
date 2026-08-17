@@ -429,7 +429,20 @@ const server = http.createServer(async (req, res) => {
         reserveAddrs = [...per].map(([address, amount_btc]) => ({ address, amount_btc }))
           .sort((a, b) => b.amount_btc - a.amount_btc);
       } catch {}
-      try { const bal = await seqrpc('getbalance', []); supply = bal[SEQ.sbtc_asset] ?? null; } catch {}
+      try {
+        // getbalance keys a REGISTERED asset by its ticker, not by its hex id,
+        // so looking the id up directly always missed and reported null -- which
+        // a reserves consumer cannot tell apart from "the bridge holds none".
+        // The label map resolves it without hardcoding the ticker.
+        const bal = await seqrpc('getbalance', []);
+        supply = bal[SEQ.sbtc_asset] ?? null;
+        if (supply === null) {
+          const labels = await seqrpc('dumpassetlabels', []).catch(() => ({}));
+          for (const [label, id] of Object.entries(labels)) {
+            if (id === SEQ.sbtc_asset && bal[label] !== undefined) { supply = bal[label]; break; }
+          }
+        }
+      } catch {}
       // Name the asset the reserve backs. Anyone publishing proof of reserves
       // needs both halves of the comparison, and a reserve figure on its own
       // does not say what it is meant to cover. Answering it here keeps that in
