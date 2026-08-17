@@ -418,8 +418,15 @@ const server = http.createServer(async (req, res) => {
       let reserve = null, supply = null;
       try { reserve = (await btcrpc('getbalances', [])).mine.trusted; } catch {}
       try { const bal = await seqrpc('getbalance', []); supply = bal[SEQ.sbtc_asset] ?? null; } catch {}
+      // Name the asset the reserve backs. Anyone publishing proof of reserves
+      // needs both halves of the comparison, and a reserve figure on its own
+      // does not say what it is meant to cover. Answering it here keeps that in
+      // one place: a consumer that hardcoded the id instead would go on
+      // comparing the reserve against a stale asset after a re-issue or a
+      // chain reset, and would report it as fully backed.
       return send(res, 200, { ok: true, pegins: Object.keys(STATE.pegins).length, pegouts: Object.keys(STATE.pegouts).length,
-        processed: Object.keys(STATE.done).length, reserve_btc: reserve, bridge_sbtc_balance: supply });
+        processed: Object.keys(STATE.done).length, reserve_btc: reserve, bridge_sbtc_balance: supply,
+        sbtc_asset: SEQ.sbtc_asset ?? null });
     }
     return send(res, 404, { ok: false, error: 'not found' });
   } catch (e) { send(res, 500, { ok: false, error: e.message }); }
