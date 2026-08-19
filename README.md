@@ -14,7 +14,7 @@ bridge, no closer to consensus than any third-party bridge.
 It is a **trusted** bridge — a BTC peg cannot be trustless without Bitcoin covenants. Users
 trust the N operators to keep the reserve 1:1 and not abscond.
 
-Canonical design: `../SequentiaByClaude/doc/sequentia/sbtc-peg-design.md`.
+Canonical design: `../Sequentia/doc/sequentia/sbtc-peg-design.md`.
 
 ## Flows
 - **Peg-in**: `POST /pegin {seq_recipient}` → a fresh BTC deposit address. Send real BTC there;
