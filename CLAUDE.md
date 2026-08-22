@@ -1,8 +1,8 @@
 # sbtc-bridge
 
-An independent, application-level BTC ⇄ SBTC custody bridge for Sequentia: lock BTC in an N-of-M
-operator multisig on Bitcoin testnet4, reissue SBTC 1:1 on Sequentia, and release reserve BTC 1:1
-on the way back.
+An independent, application-level BTC ⇄ SBTC custody peg for Sequentia. SBTC is pegged 1:1 to
+BTC held in the reserve: lock BTC in an N-of-M operator multisig on Bitcoin testnet4, reissue SBTC
+1:1 on Sequentia, and release reserve BTC 1:1 on the way back.
 
 It is **not** Elements' consensus peg and needs no consensus change. It is a **trusted** bridge:
 a BTC peg cannot be trustless without Bitcoin covenants. `README.md` says so plainly and should

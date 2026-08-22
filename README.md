@@ -1,11 +1,12 @@
 # sbtc-bridge
 
-An **independent, application-level** BTC ⇄ SBTC custody bridge for Sequentia. It is **not**
-Elements' consensus peg and needs no consensus change — it is a standard lock-and-issue
-bridge, no closer to consensus than any third-party bridge.
+An **independent, application-level** BTC ⇄ SBTC custody peg for Sequentia: SBTC is pegged
+1:1 to BTC held in the bridge's multisig reserve. It is **not** Elements' consensus peg and
+needs no consensus change — it is a standard lock-and-issue bridge, no closer to consensus
+than any third-party bridge.
 
-- **SBTC** is a normal, unprivileged, **reissuable** Sequentia asset; its reissuance token
-  lives in this bridge's Sequentia wallet.
+- **SBTC** is a normal, unprivileged, **reissuable** Sequentia asset pegged 1:1 to the
+  reserve BTC; its reissuance token lives in this bridge's Sequentia wallet.
 - **Reserve BTC** lives in a fixed **N-of-M operator multisig** on Bitcoin (testnet4), held
   as a descriptor wallet in bitcoind. On the testnet the multisig is 2-of-3 and
   `setup-sbtc.mjs` generates all three keys on the bridge host, so today a single operator
