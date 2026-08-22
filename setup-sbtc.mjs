@@ -183,7 +183,7 @@ async function main() {
     asset_id: sbtc_asset,
     operator_verified: true,
     contract: {
-      name: 'Bridged Bitcoin (SBTC)', ticker: 'SBTC', precision: 8,
+      name: 'Pegged Bitcoin', ticker: 'SBTC', precision: 8,
       entity: { domain: 'sequentia.io' },
       issuer_pubkey: '020000000000000000000000000000000000000000000000000000000000000000',
       version: 0,
