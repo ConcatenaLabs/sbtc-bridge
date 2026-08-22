@@ -5,17 +5,17 @@
 //
 //   1. bitcoind (testnet4): create a descriptor wallet `sbtc-reserve` holding a 2-of-3
 //      wsh(sortedmulti) over three keys we generate here. For testnet we run all operators,
-//      so the reserve wallet is given TWO of the three private branches (enough to fully sign
-//      a peg-out by itself -> walletprocesspsbt returns complete); the third is a watch-only
-//      backup branch. Production would split these across independent operators/hosts.
-//   2. Sequentia (elements): in the `sbtc-bridge` wallet, issue a REISSUABLE asset named SBTC
+//      so the reserve wallet is given all THREE private branches (it fully signs a peg-out by
+//      itself -> walletprocesspsbt returns complete). One operator therefore controls the
+//      reserve. Production would split these across independent operators/hosts.
+//   2. Sequentia Core (`sequentiad`): in the `sbtc-bridge` wallet, issue a REISSUABLE asset named SBTC
 //      with a tiny initial supply and its reissuance token kept in this wallet, so the bridge
 //      is the only thing that can mint/burn SBTC.
 //   3. Write config.json for bridge.mjs (RPC endpoints, the SBTC asset id, the multisig
 //      descriptor + a reserve change address), and print the registry/price snippets to add.
 //
 // Usage:
-//   SBTC_SEQ_RPC=http://user:pass@127.0.0.1:7041 \
+//   SBTC_SEQ_RPC=http://user:pass@127.0.0.1:18776 \
 //   SBTC_BTC_RPC=http://user:pass@127.0.0.1:48332 \
 //   node setup-sbtc.mjs
 //
@@ -29,7 +29,7 @@ import { dirname, join } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CFG_PATH = join(HERE, 'config.json');
 
-const SEQ_RPC = process.env.SBTC_SEQ_RPC || 'http://user:pass@127.0.0.1:7041';
+const SEQ_RPC = process.env.SBTC_SEQ_RPC || 'http://user:pass@127.0.0.1:18776';
 const BTC_RPC = process.env.SBTC_BTC_RPC || 'http://user:pass@127.0.0.1:48332';
 const SEQ_WALLET = process.env.SBTC_SEQ_WALLET || 'sbtc-bridge';
 const BTC_WALLET = process.env.SBTC_BTC_WALLET || 'sbtc-reserve';
@@ -113,8 +113,8 @@ async function setupReserve(existing) {
   const desc = info.descriptor;                                  // canonical form + checksum
 
   // Import the multisig descriptor (ranged, external + internal) into the reserve wallet so it
-  // can watch deposits AND sign releases (it holds 2 of the 3 private branches by construction:
-  // we generated all three above, but only import as SIGNING what the reserve should hold).
+  // can watch deposits AND sign releases. The descriptor carries all three private branches
+  // (generated above), so this one wallet signs a release alone — testnet only.
   await btc('importdescriptors', [[
     { desc, range: [0, 999], timestamp: 'now', active: true, internal: false },
     { desc: (await btc('getdescriptorinfo', [inner.replace('/*', '/1/*')])).descriptor,
@@ -183,7 +183,7 @@ async function main() {
     asset_id: sbtc_asset,
     operator_verified: true,
     contract: {
-      name: 'Pegged Bitcoin', ticker: 'SBTC', precision: 8,
+      name: 'Bridged Bitcoin (SBTC)', ticker: 'SBTC', precision: 8,
       entity: { domain: 'sequentia.io' },
       issuer_pubkey: '020000000000000000000000000000000000000000000000000000000000000000',
       version: 0,

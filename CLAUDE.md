@@ -1,8 +1,8 @@
 # sbtc-bridge
 
 An independent, application-level BTC ⇄ SBTC custody bridge for Sequentia: lock BTC in an N-of-M
-operator multisig on Bitcoin testnet4, reissue SBTC 1:1 on Sequentia, and burn SBTC on the way
-back.
+operator multisig on Bitcoin testnet4, reissue SBTC 1:1 on Sequentia, and release reserve BTC 1:1
+on the way back.
 
 It is **not** Elements' consensus peg and needs no consensus change. It is a **trusted** bridge:
 a BTC peg cannot be trustless without Bitcoin covenants. `README.md` says so plainly and should
@@ -31,8 +31,12 @@ the config. There is no CI, so `npm test` before every PR is the whole gate.
 
 ## The supply invariant
 
-SBTC is minted only against a confirmed BTC deposit and burned on peg-out, so total SBTC supply
-always equals the reserve BTC. Every rule below exists to protect that one equation.
+SBTC is minted only against a confirmed BTC deposit. Returned SBTC is **not burned** on peg-out:
+`destroyamount` cannot pay its fee in a non-SEQ asset, so the bridge keeps the returned coins in its
+own wallet as float, out of circulation, and spends that float before reissuing anything on the next
+peg-in. Circulating SBTC (issued minus `bridge_sbtc_balance` in `/status`) therefore always equals the
+reserve BTC, and total issued supply equals peak circulation. Every rule below exists to protect that
+one equation.
 
 ## Two failure classes that were closed deliberately
 
