@@ -11,7 +11,7 @@ keep saying so.
 Native BTC remains the privileged asset everywhere. SBTC is an ordinary, unprivileged, reissuable
 Sequentia asset — a narrow wrapper for the two use cases in the design document, not a replacement
 for BTC. Node and consensus conventions live in the
-[`Sequentia`](https://github.com/GracedEternalKingCabbageMan/Sequentia) repo.
+[`Sequentia`](https://github.com/ConcatenaLabs/Sequentia) repo.
 
 ## Shape
 

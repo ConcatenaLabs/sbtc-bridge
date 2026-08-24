@@ -19,7 +19,7 @@ It is a **trusted** bridge — a BTC peg cannot be trustless without Bitcoin cov
 trust the N operators to keep the reserve 1:1 and not abscond.
 
 Canonical design:
-[`sbtc-peg-design.md`](https://github.com/GracedEternalKingCabbageMan/Sequentia/blob/master/doc/sequentia/sbtc-peg-design.md)
+[`sbtc-peg-design.md`](https://github.com/ConcatenaLabs/Sequentia/blob/master/doc/sequentia/sbtc-peg-design.md)
 in the node repository.
 
 ## Flows
