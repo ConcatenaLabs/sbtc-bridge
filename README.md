@@ -56,7 +56,7 @@ token empty disables auth entirely, so never do that off localhost.
    wallet. To fill the config by hand instead, start from `config.example.json`.
 2. `npm start` (`node bridge.mjs`). `SBTC_BRIDGE_CONFIG` and `SBTC_BRIDGE_STATE` override the
    `config.json` / `state.json` paths.
-3. `npm test` runs the 15 unit tests against a mock chain; `npm run check` is a syntax check.
+3. `npm test` runs the unit tests against a mock chain; `npm run check` is a syntax check.
 
 The bridge orchestrates the two node wallets over RPC and hand-rolls no crypto: the Sequentia
 node signs the reissuance/send, bitcoind (holding the multisig descriptor) signs the reserve
