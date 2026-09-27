@@ -573,6 +573,23 @@ async function tick() {
   scanning = false;
 }
 
+// Load a wallet the node has on disk but not loaded (after a node restart),
+// so the service needs nothing run before it -- and no credentials on a
+// command line or in a unit file. "Already loaded" is success.
+async function ensureWalletLoaded(url, wallet, label) {
+  if (!wallet) return;
+  try {
+    await rpc(url, 'getwalletinfo', [], wallet);
+    return;
+  } catch {}
+  try {
+    await rpc(url, 'loadwallet', [wallet]);
+    log('loaded the', label, 'wallet', wallet);
+  } catch (e) {
+    if (!/already loaded/i.test(e.message)) err('could not load the', label, 'wallet', wallet + ':', e.message);
+  }
+}
+
 function main() {
   const CFG = JSON.parse(readFileSync(CFG_PATH, 'utf8'));
   SEQ = CFG.seq; BTC = CFG.btc; HTTPCFG = CFG.http || {};
@@ -590,6 +607,8 @@ function main() {
         '| SBTC', SEQ.sbtc_asset, '| poll', POLL_MS + 'ms', '| btc min-conf', BTC_MIN_CONF, '| seq min-conf', SEQ_MIN_CONF);
     // Reconcile crash-left placeholders against the chain BEFORE the first scan, so a wedged peg is
     // completed (or safely re-armed) rather than stuck, and nothing is ever double-actioned.
+    await ensureWalletLoaded(SEQ.rpc, SEQ.wallet, 'Sequentia');
+    await ensureWalletLoaded(BTC.rpc, BTC.wallet, 'Bitcoin');
     try { await reconcileOnBoot(); } catch (e) { err('boot reconcile failed:', e.message); }
     tick();
     setInterval(tick, POLL_MS);

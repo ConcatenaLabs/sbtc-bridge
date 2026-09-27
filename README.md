@@ -66,7 +66,9 @@ token empty disables auth entirely, so never do that off localhost.
    seed file to patch with the SBTC entry). Re-running reuses an existing asset id and reserve
    wallet. To fill the config by hand instead, start from `config.example.json`.
 2. `npm start` (`node bridge.mjs`). `SBTC_BRIDGE_CONFIG` and `SBTC_BRIDGE_STATE` override the
-   `config.json` / `state.json` paths.
+   `config.json` / `state.json` paths. At startup the service loads its two node wallets itself
+   when a node has them on disk but not loaded, so a service manager needs to run nothing
+   before it, and no RPC credentials ever appear on a command line or in a unit file.
 3. `npm test` runs the unit tests against a mock chain; `npm run check` is a syntax check.
 
 The bridge orchestrates the two node wallets over RPC and hand-rolls no crypto: the Sequentia
