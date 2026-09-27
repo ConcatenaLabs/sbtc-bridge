@@ -34,6 +34,11 @@ in the node repository.
 - `GET /status` → `pegins`, `pegouts`, `processed` counts, `reserve_btc`, `bridge_sbtc_balance`,
   `sbtc_asset`, `reserve_addresses` (per-address reserve balances, checkable against any
   explorer) and `reserve_custody` (the live multisig descriptor).
+- `GET /pegin/<deposit_address>` → the bound `seq_recipient` and every BTC deposit to that
+  address: amount, confirmations (against `min_conf`), `state` (`waiting`, `in_progress`,
+  `done`) and the SBTC `credit_txid` once credited.
+- `GET /pegout/<sbtc_address>` → the bound `btc_dest` and every SBTC return to that address,
+  with the same fields and the BTC `release_txid` once released.
 
 SBTC is minted ONLY against a confirmed BTC deposit, so **circulating** SBTC (issued minus
 `bridge_sbtc_balance`) always equals the reserve BTC; total issued supply equals peak circulation.
