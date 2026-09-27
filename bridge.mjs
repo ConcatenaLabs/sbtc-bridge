@@ -372,6 +372,58 @@ async function scanPegouts() {
   }
 }
 
+// ---- per-transfer status ----------------------------------------------------
+// What happened to the transfers sent to one peg-in or peg-out address, for a
+// page that wants to show a user where their bitcoin is. Read-only: it reports
+// the wallets' view and the done-set, and never acts.
+function stageOf(key) {
+  const e = doneEntry(key);
+  if (!e) return { state: 'waiting', txid: null };
+  return e.stage === 'done' ? { state: 'done', txid: e.txid } : { state: 'in_progress', txid: e.txid ?? null };
+}
+
+async function pegInStatus(addr) {
+  const bind = STATE.pegins[addr];
+  if (!bind) return null;
+  const deposits = [];
+  const rows = await btcrpc('listreceivedbyaddress', [0, true, true, addr]);
+  const txids = new Set((rows || []).flatMap((r) => (r.address === addr ? r.txids || [] : [])));
+  for (const txid of txids) {
+    const tx = await btcrpc('gettransaction', [txid, true]);
+    for (const d of tx.details || []) {
+      if (d.address !== addr || d.category !== 'receive') continue;
+      const st = stageOf(doneKey('btc', txid, d.vout));
+      deposits.push({
+        txid, vout: d.vout, amount_btc: btcAmt(sat(d.amount)), confirmations: tx.confirmations ?? 0,
+        // "waiting" covers both "not confirmed enough yet" and "confirmed,
+        // credit on the next scan"; confirmations against min_conf says which.
+        state: st.state, credit_txid: st.txid,
+      });
+    }
+  }
+  return { deposit_address: addr, seq_recipient: bind.seq_recipient, created: bind.created, min_conf: BTC_MIN_CONF, deposits };
+}
+
+async function pegOutStatus(addr) {
+  const bind = STATE.pegouts[addr];
+  if (!bind) return null;
+  const returns = [];
+  const rows = await seqrpc('listreceivedbyaddress', [0, true, true, addr]);
+  const txids = new Set((rows || []).flatMap((r) => (r.address === addr ? r.txids || [] : [])));
+  for (const txid of txids) {
+    const tx = await seqrpc('gettransaction', [txid, true]);
+    for (const d of tx.details || []) {
+      if (d.address !== addr || d.category !== 'receive' || d.asset !== SEQ.sbtc_asset) continue;
+      const st = stageOf(doneKey('seq', txid, d.vout));
+      returns.push({
+        txid, vout: d.vout, amount_sbtc: btcAmt(sat(d.amount)), confirmations: tx.confirmations ?? 0,
+        state: st.state, release_txid: st.txid,
+      });
+    }
+  }
+  return { sbtc_address: addr, btc_dest: bind.btc_dest, created: bind.created, min_conf: SEQ_MIN_CONF, returns };
+}
+
 // ---- boot reconcile ---------------------------------------------------------
 // On startup, resolve every placeholder-done entry (sentinel set, no final txid) a crash may have left:
 // find the real tx and complete the record, or (only if provably not broadcast) clear it so the next
@@ -399,6 +451,8 @@ async function reconcileOnBoot() {
 // POST /pegin  { seq_recipient }  -> { deposit_address }   (send real BTC here; SBTC is credited on confirm)
 // POST /pegout { btc_dest }       -> { sbtc_address }       (send SBTC here; real BTC is released on confirm)
 // GET  /status                    -> counts + reserve/supply sanity
+// GET  /pegin/<deposit_address>   -> each BTC deposit to it: confirmations, state, SBTC credit txid
+// GET  /pegout/<sbtc_address>     -> each SBTC return to it: confirmations, state, BTC release txid
 function readBody(req) {
   return new Promise((res) => { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { try { res(b ? JSON.parse(b) : {}); } catch { res(null); } }); });
 }
@@ -414,6 +468,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/pegout') {
       const b = await readBody(req); if (!b || !b.btc_dest) return send(res, 400, { ok: false, error: 'btc_dest required' });
       return send(res, 200, { ok: true, sbtc_address: await newPegoutAddress(String(b.btc_dest)) });
+    }
+    const m = url.pathname.match(/^\/(pegin|pegout)\/([A-Za-z0-9]{20,120})$/);
+    if (req.method === 'GET' && m) {
+      const r = m[1] === 'pegin' ? await pegInStatus(m[2]) : await pegOutStatus(m[2]);
+      if (!r) return send(res, 404, { ok: false, error: 'unknown address' });
+      return send(res, 200, { ok: true, ...r });
     }
     if (req.method === 'GET' && url.pathname === '/status') {
       let reserve = null, supply = null, reserveAddrs = null;
@@ -510,6 +570,7 @@ function __configureForTest(opts = {}) {
 export {
   scanPegins, scanPegouts, reconcileOnBoot,
   verifyPeginCredit, verifyPegoutRelease, earmarkedPegoutUtxos,
+  pegInStatus, pegOutStatus,
   doneEntry, isCompleted, doneKey, PEGIN_MARKER,
   __configureForTest,
 };
