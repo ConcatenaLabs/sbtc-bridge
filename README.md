@@ -24,8 +24,12 @@ in the node repository.
 
 ## Flows
 - **Peg-in**: `POST /pegin {seq_recipient}` → a fresh BTC deposit address. Send real BTC there;
-  after confirmations the bridge sends **SBTC 1:1** to `seq_recipient`, spending its held float
-  first and reissuing only the shortfall.
+  once the deposit has one confirmation **and** Sequentia's Bitcoin anchor has reached the block
+  holding it, the bridge sends **SBTC 1:1** to `seq_recipient`, spending its held float first and
+  reissuing only the shortfall. From then on every Sequentia block that can carry the credit is
+  anchored at or above the deposit's block, so a Bitcoin reorg that removes the deposit reorgs the
+  credit away with it. An unconfirmed deposit is never credited: a double-spend of it reorgs
+  nothing. `btc.min_conf` can raise the one-confirmation floor, never lower it.
 - **Peg-out**: `POST /pegout {btc_dest}` → a fresh Sequentia address. Send SBTC there; after
   confirmations the bridge **releases reserve BTC 1:1** to `btc_dest`. The returned SBTC is
   **not burned** (`destroyamount` cannot pay its fee in a non-SEQ asset); it stays in the bridge
@@ -36,7 +40,9 @@ in the node repository.
   explorer) and `reserve_custody` (the live multisig descriptor).
 - `GET /pegin/<deposit_address>` → the bound `seq_recipient` and every BTC deposit to that
   address: amount, confirmations (against `min_conf`), `state` (`waiting`, `in_progress`,
-  `done`) and the SBTC `credit_txid` once credited.
+  `done`) and the SBTC `credit_txid` once credited, plus `anchor_height` and `btc_tip`: a
+  confirmed deposit in block `btc_tip - confirmations + 1` is credited once `anchor_height`
+  reaches it.
 - `GET /pegout/<sbtc_address>` → the bound `btc_dest` and every SBTC return to that address,
   with the same fields and the BTC `release_txid` once released.
 

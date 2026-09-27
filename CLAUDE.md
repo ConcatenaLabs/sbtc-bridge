@@ -31,7 +31,10 @@ the config. There is no CI, so `npm test` before every PR is the whole gate.
 
 ## The supply invariant
 
-SBTC is minted only against a confirmed BTC deposit. Returned SBTC is **not burned** on peg-out:
+SBTC is minted only against a confirmed BTC deposit, and only once Sequentia's Bitcoin anchor has
+reached the block holding it (`anchorView`/`anchorCovers` in `bridge.mjs`): from then on a Bitcoin
+reorg that removes the deposit also reorgs the credit. Never credit an unconfirmed deposit; a
+double-spend of one reorgs nothing, and the one-confirmation floor is enforced in code. Returned SBTC is **not burned** on peg-out:
 `destroyamount` cannot pay its fee in a non-SEQ asset, so the bridge keeps the returned coins in its
 own wallet as float, out of circulation, and spends that float before reissuing anything on the next
 peg-in. Circulating SBTC (issued minus `bridge_sbtc_balance` in `/status`) therefore always equals the

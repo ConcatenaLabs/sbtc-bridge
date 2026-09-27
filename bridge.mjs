@@ -42,6 +42,10 @@ const STATE_PATH = process.env.SBTC_BRIDGE_STATE || join(HERE, 'state.json');
 let STATE = { pegins: {}, pegouts: {}, done: {}, next_index: 0 };
 let SEQ = null, BTC = null, HTTPCFG = {};
 let SEQ_MIN_CONF = 1, BTC_MIN_CONF = 2, POLL_MS = 15000;
+// Credit a deposit only once Sequentia's Bitcoin anchor has reached the
+// block that confirmed it (see anchorCovers). On by default; the unit tests'
+// mock chains have no anchor and turn it off.
+let REQUIRE_ANCHOR = true;
 let seqrpc = null, btcrpc = null;
 
 // ---- persisted state --------------------------------------------------------
@@ -229,9 +233,38 @@ async function earmarkedPegoutUtxos() {
   }
   return { outpoints, sats };
 }
+// ---- anchoring ---------------------------------------------------------------
+// Why a deposit waits for the anchor. Every Sequentia block commits to a
+// Bitcoin block (its anchor), and Sequentia reorgs whenever that anchor is
+// reorged. So once the node's anchor has reached the Bitcoin block holding a
+// deposit, every Sequentia block that can include the SBTC credit anchors at
+// or above it: if a Bitcoin reorg removes the deposit, it removes the anchor
+// too, and the credit goes with it. The peg then needs no deep Bitcoin
+// confirmation count to be safe against reorgs. It does need at least one:
+// an unconfirmed deposit is in no block, so a double-spend of it (RBF)
+// reorgs nothing, and SBTC credited against it would stay minted with no
+// bitcoin behind it. Hence min_conf >= 1 always, and the anchor check.
+async function anchorView() {
+  try {
+    const [a, tip] = await Promise.all([seqrpc('getanchorstatus', []), btcrpc('getblockcount', [])]);
+    if (!a || a.anchorstatus !== 'ok') return { ok: false, reason: 'anchor status ' + (a && a.anchorstatus) };
+    return { ok: true, anchorHeight: Number(a.anchorheight), tip: Number(tip) };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+function anchorCovers(view, u) {
+  if (!view || !view.ok) return false; // cannot tell: never credit on a guess
+  const conf = Number(u.confirmations ?? 0);
+  if (conf < 1) return false;
+  const depositHeight = view.tip - conf + 1;
+  return view.anchorHeight >= depositHeight;
+}
+
 async function scanPegins() {
   // Confirmed UTXOs sitting at our peg-in deposit addresses = new reserve deposits to credit.
   const utxos = await btcrpc('listunspent', [BTC_MIN_CONF, 9999999, Object.keys(STATE.pegins)]);
+  const anchor = REQUIRE_ANCHOR ? await anchorView() : null;
 
   // FUND-SAFETY (a peg-in must NEVER cannibalize a peg-out): the SBTC still owed to not-yet-released
   // peg-outs is earmarked (locked out of coin selection + subtracted from recyclable float) IMMEDIATELY
@@ -249,6 +282,7 @@ async function scanPegins() {
     if (!bind) continue;                                 // not a peg-in address (change/other)
     const sats = sat(u.amount);
     if (sats <= 0) continue;
+    if (REQUIRE_ANCHOR && !anchorCovers(anchor, u)) continue; // not yet: the next scan looks again
     const need = Number(btcAmt(sats));
 
     // A pending sentinel means a prior attempt started (or crashed) mid-credit. Reconcile it against the
@@ -401,7 +435,14 @@ async function pegInStatus(addr) {
       });
     }
   }
-  return { deposit_address: addr, seq_recipient: bind.seq_recipient, created: bind.created, min_conf: BTC_MIN_CONF, deposits };
+  // Where Sequentia's Bitcoin anchor stands: a confirmed deposit is credited
+  // once the anchor reaches its block (see anchorView).
+  const anchor = REQUIRE_ANCHOR ? await anchorView() : null;
+  return {
+    deposit_address: addr, seq_recipient: bind.seq_recipient, created: bind.created, min_conf: BTC_MIN_CONF,
+    anchor_height: anchor && anchor.ok ? anchor.anchorHeight : null, btc_tip: anchor && anchor.ok ? anchor.tip : null,
+    deposits,
+  };
 }
 
 async function pegOutStatus(addr) {
@@ -536,7 +577,9 @@ function main() {
   const CFG = JSON.parse(readFileSync(CFG_PATH, 'utf8'));
   SEQ = CFG.seq; BTC = CFG.btc; HTTPCFG = CFG.http || {};
   SEQ_MIN_CONF = Number(SEQ.min_conf ?? 1);
-  BTC_MIN_CONF = Number(BTC.min_conf ?? 2);
+  // Never below one: see anchorView for why an unconfirmed deposit is unsafe.
+  BTC_MIN_CONF = Math.max(1, Number(BTC.min_conf ?? 1));
+  REQUIRE_ANCHOR = BTC.require_anchor ?? true;
   POLL_MS = Number(CFG.poll_ms || 15000);
   seqrpc = (m, p) => rpc(SEQ.rpc, m, p, SEQ.wallet);
   btcrpc = (m, p) => rpc(BTC.rpc, m, p, BTC.wallet);
@@ -565,12 +608,13 @@ function __configureForTest(opts = {}) {
   saveState = opts.saveState || (() => {});
   if (opts.seqMinConf !== undefined) SEQ_MIN_CONF = Number(opts.seqMinConf);
   if (opts.btcMinConf !== undefined) BTC_MIN_CONF = Number(opts.btcMinConf);
+  REQUIRE_ANCHOR = opts.requireAnchor ?? false;
 }
 
 export {
   scanPegins, scanPegouts, reconcileOnBoot,
   verifyPeginCredit, verifyPegoutRelease, earmarkedPegoutUtxos,
-  pegInStatus, pegOutStatus,
+  pegInStatus, pegOutStatus, anchorCovers,
   doneEntry, isCompleted, doneKey, PEGIN_MARKER,
   __configureForTest,
 };
