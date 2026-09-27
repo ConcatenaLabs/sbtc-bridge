@@ -163,7 +163,7 @@ async function main() {
     btc: {
       rpc: BTC_RPC, wallet: BTC_WALLET,
       multisig_desc: reserve.multisig_desc, change_addr: reserve.change_addr,
-      min_conf: (existing && existing.btc && existing.btc.min_conf) ?? 2,
+      min_conf: (existing && existing.btc && existing.btc.min_conf) ?? 1,
       fee_sat_vb: (existing && existing.btc && existing.btc.fee_sat_vb) ?? 2,
     },
     http: {

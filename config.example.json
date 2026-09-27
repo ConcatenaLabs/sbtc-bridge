@@ -11,7 +11,7 @@
     "wallet": "sbtc-reserve",
     "multisig_desc": "wsh(sortedmulti(2,OP1_XPUB/*,OP2_XPUB/*,OP3_XPUB/*))#CHECKSUM",
     "change_addr": "A_RESERVE_MULTISIG_ADDRESS",
-    "min_conf": 2,
+    "min_conf": 1,
     "fee_sat_vb": 2
   },
   "http": { "host": "127.0.0.1", "port": 9987, "token": "SET_A_BEARER_TOKEN" },
