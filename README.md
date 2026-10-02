@@ -30,8 +30,14 @@ in the node repository.
   anchored at or above the deposit's block, so a Bitcoin reorg that removes the deposit reorgs the
   credit away with it. An unconfirmed deposit is never credited: a double-spend of it reorgs
   nothing. `btc.min_conf` can raise the one-confirmation floor, never lower it.
-- **Peg-out**: `POST /pegout {btc_dest}` → a fresh Sequentia address. Send SBTC there; after
-  confirmations the bridge **releases reserve BTC 1:1** to `btc_dest`. The returned SBTC is
+- **Peg-out**: `POST /pegout {btc_dest}` → a fresh Sequentia address. Send SBTC there; once the
+  Sequentia block holding it is final, the bridge **releases reserve BTC 1:1** to `btc_dest`.
+  Final means the block is on the node's active chain, certified by the committee (itself or
+  through a certified block above it), and anchored at a Bitcoin block that the bridge's
+  bitcoind has on its best chain with at least `btc.min_conf` confirmations, the depth a
+  deposit needs before a credit. A release is a Bitcoin transaction and cannot be reorged away
+  with Sequentia, so it waits until a Bitcoin reorg can no longer take the return back
+  without going deeper than that. The returned SBTC is
   **not burned** (`destroyamount` cannot pay its fee in a non-SEQ asset); it stays in the bridge
   wallet as float, out of circulation, and is spent by the next peg-in before anything new is
   reissued.
@@ -44,7 +50,8 @@ in the node repository.
   confirmed deposit in block `btc_tip - confirmations + 1` is credited once `anchor_height`
   reaches it.
 - `GET /pegout/<sbtc_address>` → the bound `btc_dest` and every SBTC return to that address,
-  with the same fields and the BTC `release_txid` once released.
+  with the same fields and the BTC `release_txid` once released. A confirmed return shows
+  `waiting` until its block is final.
 
 SBTC is minted ONLY against a confirmed BTC deposit, so **circulating** SBTC (issued minus
 `bridge_sbtc_balance`) always equals the reserve BTC; total issued supply equals peak circulation.

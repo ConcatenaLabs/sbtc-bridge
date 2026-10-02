@@ -17,7 +17,8 @@
 //  - Idempotent: every BTC deposit (by outpoint) and every SBTC return (by outpoint) is processed
 //    AT MOST ONCE — a persisted `done` set keyed by outpoint gates both directions.
 //  - 1:1 only: SBTC is reissued ONLY against a CONFIRMED BTC deposit, for exactly its sats; reserve
-//    BTC is released ONLY against a CONFIRMED SBTC return, for exactly its sats (minus the BTC fee).
+//    BTC is released ONLY against an SBTC return in a FINAL block whose Bitcoin anchor is buried
+//    (returnIsFinal), for exactly its sats (minus the BTC fee).
 //  - No unbacked mint, no double-release, no permanent wedge: an outpoint is marked PENDING before
 //    the irreversible action and DONE (with the real txid) after it. A crash or an ambiguous RPC
 //    failure (tx relayed but the response was lost) is never blind-retried and never blind-cleared:
@@ -340,7 +341,8 @@ async function scanPegins() {
 
 // ---- PEG-OUT: SBTC returned -> release reserve BTC 1:1 ------------------------
 // A user asks for a fresh Sequentia address bound to their Bitcoin destination. When SBTC lands there
-// (confirmed), we release exactly that many BTC sats (minus the Bitcoin fee) from the reserve multisig.
+// (confirmed, and final under Bitcoin anchoring: see returnIsFinal), we release exactly that many BTC
+// sats (minus the Bitcoin fee) from the reserve multisig.
 async function newPegoutAddress(btcDest) {
   const addr = await seqrpc('getnewaddress', ['pegout:' + btcDest]);
   STATE.pegouts[addr] = { btc_dest: btcDest, created: Math.floor(Date.now() / 1000) };
@@ -348,11 +350,52 @@ async function newPegoutAddress(btcDest) {
   log('peg-out address', addr, '->', btcDest);
   return addr;
 }
+// Why a release waits for finality. A release is a Bitcoin transaction: once
+// broadcast it stays valid whatever happens to Sequentia. The SBTC return that
+// paid for it is not so durable. Sequentia reorgs whenever the Bitcoin block
+// anchoring the return's block is reorged, so a release made before that anchor
+// is buried would leave the bitcoin gone and the SBTC back in the user's hands.
+// A release therefore waits until the block holding the return is
+//  - on the node's active chain,
+//  - final: certified by the committee, or below a certified block on the
+//    active chain (the node refuses any fork at or below its highest certified
+//    block, so the block under one is as final as the block itself), and
+//  - anchored at a Bitcoin block that bitcoind has on its best chain with at
+//    least btc.min_conf confirmations: the depth a deposit needs before a
+//    credit.
+// It reads the same two sources as the peg-in side: the node's own verdict on
+// its anchor (anchorView) and bitcoind. Anything it cannot read holds the
+// release; the next scan looks again.
+async function returnIsFinal(view, txid) {
+  if (!view || !view.ok) return { ok: false, reason: 'anchor ' + (view ? view.reason : 'unread') };
+  try {
+    const tx = await seqrpc('gettransaction', [txid]);
+    if (!tx || !tx.blockhash) return { ok: false, reason: 'return not in a block' };
+    let hdr = await seqrpc('getblockheader', [tx.blockhash]);
+    if (!hdr || !(Number(hdr.confirmations) >= 1)) return { ok: false, reason: 'return block not on the active chain' };
+    if (!hdr.anchorhash) return { ok: false, reason: 'return block reports no anchor' };
+    const anchor = await btcrpc('getblockheader', [hdr.anchorhash]);
+    const anchorConf = Number(anchor && anchor.confirmations);
+    if (!(anchorConf >= BTC_MIN_CONF)) {
+      return { ok: false, reason: 'anchor ' + hdr.anchorhash + ' has ' + anchorConf + ' of ' + BTC_MIN_CONF + ' confirmations' };
+    }
+    while (hdr.poscertified !== true) {
+      if (!hdr.nextblockhash) return { ok: false, reason: 'no certified block at or above the return' };
+      hdr = await seqrpc('getblockheader', [hdr.nextblockhash]);
+      if (!hdr || !(Number(hdr.confirmations) >= 1)) return { ok: false, reason: 'active chain moved while reading' };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
 async function scanPegouts() {
   const addrs = Object.keys(STATE.pegouts);
   if (!addrs.length) return;
   // Confirmed SBTC UTXOs at our peg-out addresses = SBTC the user handed back for real BTC.
   const utxos = await seqrpc('listunspent', [SEQ_MIN_CONF, 9999999, addrs, false, { asset: SEQ.sbtc_asset }]);
+  const anchor = REQUIRE_ANCHOR && (utxos || []).length ? await anchorView() : null;
   for (const u of utxos || []) {
     if (u.asset !== SEQ.sbtc_asset) continue;
     const key = doneKey('seq', u.txid, u.vout);
@@ -369,6 +412,11 @@ async function scanPegouts() {
       if (v.status === 'confirmed') { markDone(key, v.txid); log('PEG-OUT reconciled', key, 'already released tx', v.txid); continue; }
       if (v.status !== 'absent')    { err('PEG-OUT reconcile inconclusive for', key, '-', v.reason, '(leaving pending, no retry)'); continue; }
       clearSentinel(key);
+    }
+
+    if (REQUIRE_ANCHOR) {
+      const fin = await returnIsFinal(anchor, u.txid);
+      if (!fin.ok) continue;                             // not yet: the next scan looks again
     }
 
     try {
@@ -490,7 +538,7 @@ async function reconcileOnBoot() {
 
 // ---- HTTP API ---------------------------------------------------------------
 // POST /pegin  { seq_recipient }  -> { deposit_address }   (send real BTC here; SBTC is credited on confirm)
-// POST /pegout { btc_dest }       -> { sbtc_address }       (send SBTC here; real BTC is released on confirm)
+// POST /pegout { btc_dest }       -> { sbtc_address }       (send SBTC here; real BTC is released once final)
 // GET  /status                    -> counts + reserve/supply sanity
 // GET  /pegin/<deposit_address>   -> each BTC deposit to it: confirmations, state, SBTC credit txid
 // GET  /pegout/<sbtc_address>     -> each SBTC return to it: confirmations, state, BTC release txid
