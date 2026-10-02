@@ -34,7 +34,11 @@ the config. There is no CI, so `npm test` before every PR is the whole gate.
 SBTC is minted only against a confirmed BTC deposit, and only once Sequentia's Bitcoin anchor has
 reached the block holding it (`anchorView`/`anchorCovers` in `bridge.mjs`): from then on a Bitcoin
 reorg that removes the deposit also reorgs the credit. Never credit an unconfirmed deposit; a
-double-spend of one reorgs nothing, and the one-confirmation floor is enforced in code. Returned SBTC is **not burned** on peg-out:
+double-spend of one reorgs nothing, and the one-confirmation floor is enforced in code. Reserve
+BTC is released only once the block holding the returned SBTC is final: certified (itself or under
+a certified block) and anchored at a Bitcoin block buried to `btc.min_conf` (`returnIsFinal`). A
+release cannot be reorged away with Sequentia, so releasing earlier would let a Bitcoin reorg hand
+the SBTC back after the bitcoin had left. Returned SBTC is **not burned** on peg-out:
 `destroyamount` cannot pay its fee in a non-SEQ asset, so the bridge keeps the returned coins in its
 own wallet as float, out of circulation, and spends that float before reissuing anything on the next
 peg-in. Circulating SBTC (issued minus `bridge_sbtc_balance` in `/status`) therefore always equals the
