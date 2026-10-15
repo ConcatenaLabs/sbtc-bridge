@@ -10,8 +10,7 @@
 // It hand-rolls no crypto: the Sequentia node signs the reissuance/send, and bitcoind (with the
 // multisig descriptor) signs the reserve release via PSBT. It is a trusted bridge — users trust
 // the N operators to keep the reserve 1:1 and not abscond (no BTC peg can be trustless without
-// Bitcoin covenants). See
-// https://github.com/ConcatenaLabs/Sequentia/blob/master/doc/sequentia/sbtc-peg-design.md
+// Bitcoin covenants). See DESIGN.md.
 //
 // SECURITY INVARIANTS (enforced below):
 //  - Idempotent: every BTC deposit (by outpoint) and every SBTC return (by outpoint) is processed
