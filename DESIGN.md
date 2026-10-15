@@ -42,24 +42,31 @@ A standard **lock-and-issue** bridge with two custody roles, both held by the sa
 **N-of-M operator set** (testnet: we run all N; break-and-fix is fine):
 
 - On **Bitcoin (testnet4):** an N-of-M multisig address holding the reserve BTC.
-- On **Sequentia:** the **reissuance token** for SBTC, so the operators mint/burn SBTC 1:1
+- On **Sequentia:** the **reissuance token** for SBTC, so the operators issue SBTC 1:1
   against the reserve.
 
 Trust model: users trust the N operators to keep the reserve 1:1 and not abscond or
 over-issue — the same trust as any custodial bridge, and the trust the user accepted in
-choosing a fixed multisig. This is a *reserve*, not fronted market-maker inventory: SBTC is
-minted only against a real BTC deposit and burned only when BTC is released.
+choosing a fixed multisig. This is a *reserve*, not fronted market-maker inventory: SBTC enters
+circulation only against a real BTC deposit and leaves it when BTC is released, so
+circulating SBTC (issued, less the float the bridge holds) equals the reserve.
 
 ## 3. Peg-in / peg-out (the bridge service)
 
-- **Peg-in:** the user sends real BTC to the bridge's N-of-M multisig on testnet4. The bridge
-  watches the deposit and, after K confirmations, **reissues SBTC 1:1** to the user's
-  Sequentia address (operators co-sign the reissuance).
-- **Peg-out:** the user sends SBTC to the bridge's Sequentia address; the bridge **burns it**
-  and **releases the reserve BTC 1:1** from the multisig to the user's stated Bitcoin address
-  (operators co-sign the Bitcoin tx).
-- Idempotent + crash-safe (persisted processed-deposits / processed-burns sets); never mints
-  unbacked SBTC, never double-spends a reserve UTXO, never releases more than was burned.
+- **Peg-in:** the user sends real BTC to a deposit address of the bridge's N-of-M multisig on
+  testnet4. Once the deposit has at least one confirmation **and** Sequentia's Bitcoin anchor
+  has reached the block holding it, the bridge sends **SBTC 1:1** to the user's Sequentia
+  address, spending the SBTC float it holds first and reissuing only the shortfall. Every
+  Sequentia block that can carry the credit is then anchored at or above the deposit, so a
+  Bitcoin reorg that removes the deposit removes the credit with it.
+- **Peg-out:** the user sends SBTC to a bridge address on Sequentia; once the block holding it
+  is final (on the active chain, certified, and anchored at a Bitcoin block with the deposit
+  confirmation depth), the bridge **releases reserve BTC 1:1** from the multisig to the user's
+  Bitcoin address. The returned SBTC is **not burned**: `destroyamount` cannot pay its fee in a
+  non-SEQ asset, so it stays in the bridge wallet as float, out of circulation, and the next
+  peg-in spends it before anything new is reissued.
+- Idempotent and crash-safe (persisted sets of processed deposits and peg-outs); never credits
+  unbacked SBTC, never double-spends a reserve UTXO, never releases more than was returned.
   This is the security-critical component; keep it simple and auditable. Both flows are
   exposed publicly (SBTC is a usable asset).
 
@@ -133,29 +140,17 @@ BTC → SBTC to rest (in the `SBTC/BTC` book, `pair` quote = BTC, `peg_out_on_fi
 fill pegs SBTC → BTC to the taker while receiving the taker's SBTC — internally SBTC↔SBTC,
 user-facing BTC↔SBTC. Do not special-case-block it.
 
-## 6. Build order (bundled; ONE build/verify at the very end)
+## 6. Where each part lives
 
-No consensus code. In order:
+No part of SBTC is consensus code.
 
-1. **SBTC asset + bridge service.** Issue the reissuable SBTC asset (reissuance token → the
-   N-of-M multisig); the off-chain bridge service (built: `~/sbtc-bridge`). Register SBTC. (service; registry)
-2. **SBTC in the wallets** as a normal unprivileged asset (one row among equals; NO public
-   wrap/unwrap UI in the wallet). (wallet)
-3. **Public wrap/unwrap → COMPAGES** (the cross-chain bridge product), calling the sbtc-bridge
-   `/pegin` + `/pegout`, alongside its Ethereum (and coming Solana/others) bridges. (compages)
-4. **DEX composer toggle + silent peg (narrow):** show a default-ON "Keep resting while
-   offline" toggle ONLY for on-chain-BTC-pay + LIMIT orders; ON → peg-in on rest / peg-out on
-   fill (covenant). Market + LN never touch SBTC. (wallet, relay)
-5. **DEX terminal settlement rewrite** (rail-blind covenant book-walking; same-chain already
-   works; a BTC LIMIT order with the toggle ON rests via an SBTC covenant, everything else is
-   native BTC). Tier A control surface already committed on `terminal-rebuild`. (wallet)
-6. **Verify EVERYTHING once** (bridge, wallet builds web + Ambra, Compages, all combos incl.
-   peg-in/out + BTC market/LN native + BTC limit persist-on/off + partial fill), then ship.
-   Do not rebuild/deploy mid-way.
-
-## 7. Open items to confirm during build
-- M and N for the operator multisig (testnet: e.g. 2-of-3 under our control).
-- Reissuable vs fixed-supply SBTC (reissuable chosen: unbounded peg-ins, operators trusted
-  not to over-issue — consistent with the multisig trust already accepted).
-- Which existing bridge/service tooling to reuse (the seqob relay/settler stack is unrelated;
-  this is a new BTC↔SBTC custody service, closest in spirit to a wrapped-asset bridge).
+- **The bridge service:** `bridge.mjs` in this repository. On the testnet the reserve
+  multisig is 2-of-3, and `GET /status` returns its live descriptor (`reserve_custody`).
+- **SBTC in the wallets**, as an ordinary unprivileged asset with no wrap/unwrap UI of its own:
+  the SWK web wallet (`sbtc.js`, and the silent peg in `swap.js`) and Ambra
+  (`sbtc_client.dart`, `sbtc_peg_service.dart`).
+- **Public wrap and unwrap:** [Compages](https://github.com/ConcatenaLabs/compages), which
+  proxies this service's `/pegin` and `/pegout` beside its other bridges.
+- **The DEX silent peg** (section 5): the "Keep resting while offline" toggle, shown only for
+  on-chain BTC-paying limit orders, in the same wallets; market orders and every Lightning leg
+  stay native BTC.
