@@ -4,7 +4,7 @@
 // confirms. Against a mock chain; limiter.regtest.test.mjs runs a real one.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mintNext, limits, MIN_AGE } from '../limiter.mjs';
+import { mintNext, limits, explicitCoin, MIN_AGE } from '../limiter.mjs';
 import { scanPegins, doneEntry, doneKey, isCompleted, __configureForTest } from '../bridge.mjs';
 
 const instance = { params: { WINDOW: '000a', ALLOWANCE: '0000000005f5e100', RECOVERY_DELAY: '0002' } };
@@ -68,4 +68,10 @@ test('once the limiter mint confirms, the credit is sent from the wallet, once',
   assert.equal(doneEntry(KEY).txid, 'send1');
   assert.equal(calls.filter((c) => c === 'sendtoaddress').length, 1);
   assert.ok(!calls.includes('reissueasset'));
+});
+
+test('only an explicit coin pays a covenant spend\'s fee', () => {
+  const z = '00'.repeat(32);
+  assert.equal(explicitCoin({ amount: 1, amountblinder: z, assetblinder: z }), true);
+  assert.equal(explicitCoin({ amount: 1, amountcommitment: '08ab', amountblinder: '11'.repeat(32), assetblinder: '22'.repeat(32) }), false);
 });

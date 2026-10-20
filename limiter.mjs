@@ -26,6 +26,12 @@ import { readFileSync, writeFileSync, existsSync, renameSync, mkdtempSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+/** Whether a listunspent entry is explicit: no commitment, and zero blinders. */
+export function explicitCoin(u) {
+  const zero = (h) => !h || /^0+$/.test(h);
+  return !u.amountcommitment && !u.assetcommitment && zero(u.amountblinder) && zero(u.assetblinder);
+}
+
 /** The least age, in blocks, of a coin a mint spends. */
 export const MIN_AGE = 2;
 
@@ -239,8 +245,10 @@ export class MintLimiter {
     if (verdict.refused) throw Object.assign(new Error(verdict.refused), { waiting: true });
     const unspent = await this.call('listunspent', { minconf: 1, query_options: { asset: this.feeAsset } });
     const locked = new Set((await this.call('listlockunspent', {})).map((l) => `${l.txid}:${l.vout}`));
-    const fc = unspent.filter((u) => !locked.has(`${u.txid}:${u.vout}`)).sort((a, b) => Number(b.amount) - Number(a.amount))[0];
-    if (!fc) throw new Error(`the wallet has no confirmed coin of the fee asset ${this.feeAsset}`);
+    // An explicit coin: the covenant spend shows every amount, and the wallet blinds some change.
+    const fc = unspent.filter((u) => explicitCoin(u) && !locked.has(`${u.txid}:${u.vout}`))
+      .sort((a, b) => Number(b.amount) - Number(a.amount))[0];
+    if (!fc) throw new Error(`the wallet has no confirmed explicit coin of the fee asset ${this.feeAsset}`);
     const request = {
       path: 'mint',
       coin: { tx: rec.coinHex ?? await this.rawTx(rec.coin.txid), vout: rec.coin.vout },
