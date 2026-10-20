@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
 import { scanPegins, doneEntry, doneKey, isCompleted, __configureForTest } from '../bridge.mjs';
-import { MintLimiter } from '../limiter.mjs';
+import { MintLimiter, explicitCoin } from '../limiter.mjs';
 
 const SEQUENTIAD = process.env.SEQUENTIAD;
 const TOOL = process.env.MINT_LIMITER;
@@ -158,7 +158,7 @@ test('SBTC minted through the mint limiter on regtest', { skip, timeout: 600000 
   // --- the brake, applied by the watcher's own wallet with the cold key's signature.
   writeFileSync(join(dir, 'instance.json'), JSON.stringify(after2.instance));
   const sig = JSON.parse(execFileSync(TOOL, ['arm-signature', '--instance', join(dir, 'instance.json'), '--mnemonic-file', coldWords]).toString());
-  const fc = (await rpc('listunspent', { minconf: 1, query_options: { asset: FEE } }, 'watcher'))[0];
+  const fc = (await rpc('listunspent', { minconf: 1, query_options: { asset: FEE } }, 'watcher')).filter(explicitCoin)[0];
   const change = (await rpc('getaddressinfo', [await rpc('getnewaddress', [], 'watcher')], 'watcher')).scriptPubKey;
   const arm = JSON.parse(execFileSync(TOOL, ['build', '--instance', join(dir, 'instance.json')], { input: JSON.stringify({
     path: 'arm',
