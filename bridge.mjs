@@ -30,6 +30,7 @@ import http from 'node:http';
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import { MintLimiter } from './limiter.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CFG_PATH = process.env.SBTC_BRIDGE_CONFIG || join(HERE, 'config.json');
@@ -47,6 +48,10 @@ let SEQ_MIN_CONF = 1, BTC_MIN_CONF = 2, POLL_MS = 15000;
 // mock chains have no anchor and turn it off.
 let REQUIRE_ANCHOR = true;
 let seqrpc = null, btcrpc = null;
+// The mint limiter (limiter.mjs), when `seq.mint_limiter` is configured: every
+// reissuance of SBTC is then a spend of the covenant that holds its token, and
+// the wallet never reissues bare.
+let LIMITER = null;
 
 // ---- persisted state --------------------------------------------------------
 // { pegins:  { [btcDepositAddr]: { seq_recipient, created } },
@@ -179,6 +184,54 @@ async function verifyPegoutRelease(key, entry) {
   return { status: 'absent' };
 }
 
+// ---- the mint limiter ---------------------------------------------------------
+// With `seq.mint_limiter` configured, SBTC is reissued only by a spend of the
+// mint limiter covenant that holds its reissuance token (limiter.mjs). The
+// covenant caps what one window of blocks can mint, and the cold key's brake
+// stops it; the bridge holds only the operator key.
+
+/** Mints `atoms` of SBTC to this wallet through the limiter for credit `key`,
+ *  recording the transaction id on the credit's pending entry BEFORE the
+ *  broadcast. Returns the txid. Throws (with `waiting`) when the covenant would
+ *  refuse, before anything is built. */
+async function limiterMint(atoms, key) {
+  const rec = await LIMITER.reconcile(limiterRecord());
+  if (!rec) throw Object.assign(new Error(limiterBlocked() ?? "the mint limiter's coin is being followed"), { waiting: true });
+  if (rec.foreignMint) throw Object.assign(new Error(`a mint this bridge did not sign spent the limiter (${rec.foreignMint.txid}); minting is stopped for a human`), { waiting: true });
+  const built = await LIMITER.buildMint(rec, atoms);
+  markPending(key, { mint_txid: built.txid, mint_atoms: String(atoms) });
+  await seqrpc('sendrawtransaction', [built.hex]);
+  LIMITER.advance(rec, built);
+  return built.txid;
+}
+
+/** Where a limiter mint stands: 'confirmed', 'pending' (in the mempool),
+ *  'absent' (the wallet never took it, or it was displaced), 'unknown'. */
+async function limiterMintFate(txid) {
+  try {
+    const t = await seqrpc('gettransaction', [txid]);
+    if (t.confirmations >= 1) return 'confirmed';
+    if (t.confirmations < 0) return 'absent';
+    return 'pending';
+  } catch (e) {
+    return /Invalid or non-wallet transaction id/i.test(e.message) ? 'absent' : 'unknown';
+  }
+}
+
+function limiterRecord() {
+  const rec = LIMITER.load();
+  if (!rec) throw Object.assign(new Error(limiterBlocked()), { waiting: true });
+  return rec;
+}
+
+/** Why the limiter cannot mint at all, or null. */
+function limiterBlocked() {
+  const rec = LIMITER.load();
+  if (!rec) return 'the SBTC reissuance token is not in its mint limiter yet (run limiter-move.mjs)';
+  if (rec.recovered) return `the cold key recovered the SBTC token from its mint limiter (${rec.recovered.txid}); minting waits for a new limiter`;
+  return null;
+}
+
 // ---- PEG-IN: real BTC deposit -> reissue SBTC 1:1 -----------------------------
 // A user asks for a fresh deposit address bound to their Sequentia recipient. When BTC lands there
 // (confirmed), we reissue exactly that many SBTC sats to the recipient. SBTC is minted ONLY here,
@@ -288,7 +341,21 @@ async function scanPegins() {
     // A pending sentinel means a prior attempt started (or crashed) mid-credit. Reconcile it against the
     // chain before doing anything irreversible — NEVER blind-retry (would mint unbacked SBTC).
     const pending = doneEntry(key);
-    if (pending) {
+    if (pending && pending.mint_txid) {
+      // A mint through the limiter for this credit was broadcast. Its SBTC is
+      // spendable once it confirms (a transaction with an input not the
+      // wallet's own is not trusted before that); until then the credit waits,
+      // and it is never minted twice. A mint the chain provably never took is
+      // dropped, and the credit starts again from the same limiter coin, so
+      // two mints for it can never both land.
+      const m = await limiterMintFate(pending.mint_txid);
+      if (m === 'pending' || m === 'unknown') continue;
+      if (m === 'absent') { clearSentinel(key); log('PEG-IN', key, 'limiter mint', pending.mint_txid, 'never landed; it is minted again'); continue; }
+      const v = await verifyPeginCredit(key, pending);
+      if (v.status === 'confirmed') { markDone(key, v.txid); log('PEG-IN reconciled', key, 'already credited tx', v.txid); continue; }
+      if (v.status !== 'absent')    { err('PEG-IN reconcile inconclusive for', key, '-', v.reason, '(leaving pending, no retry)'); continue; }
+      // Minted and confirmed, not yet sent: the send below finds the SBTC in the wallet.
+    } else if (pending) {
       const v = await verifyPeginCredit(key, pending);
       if (v.status === 'confirmed') { markDone(key, v.txid); log('PEG-IN reconciled', key, 'already credited tx', v.txid); continue; }
       if (v.status !== 'absent')    { err('PEG-IN reconcile inconclusive for', key, '-', v.reason, '(leaving pending, no retry)'); continue; }
@@ -319,6 +386,15 @@ async function scanPegins() {
       // credit. Subtracting it mints the honest shortfall from fresh supply and leaves the return intact.
       const freeFloat = Math.max(0, held - earmark.sats / 1e8);
       const shortfall = need - freeFloat;
+      if (shortfall > 1e-8 && LIMITER) {
+        // Through the mint limiter: the shortfall is minted to this wallet by
+        // a spend of the covenant, its txid recorded before the broadcast, and
+        // the credit is sent once the mint confirms (next scans). A full
+        // window or the brake makes the credit wait.
+        const minted = await limiterMint(Math.round(shortfall * 1e8), key);
+        log('PEG-IN', key, 'minted', btcAmt(Math.round(shortfall * 1e8)), 'SBTC through the mint limiter, tx', minted, '- credited once it confirms');
+        continue;
+      }
       if (shortfall > 1e-8) await seqrpc('reissueasset', [SEQ.sbtc_asset, Number(shortfall.toFixed(8)), SEQ.fee_asset]);
       // Stamp the deposit outpoint as the send's wallet comment so an ambiguous failure (tx relayed,
       // response lost) is reconciled by comment instead of re-sent. sendtoaddress params: [address,
@@ -329,6 +405,10 @@ async function scanPegins() {
       markDone(key, sendTxid);
       log('PEG-IN', u.txid + ':' + u.vout, btcAmt(sats), 'BTC ->', sats, 'SBTC to', bind.seq_recipient, 'tx', sendTxid);
     } catch (e) {
+      // A limiter mint whose broadcast is in doubt keeps its record: the next
+      // scan asks the chain what became of it, and never mints again before.
+      if (doneEntry(key)?.mint_txid) { err('PEG-IN', key, 'limiter mint', doneEntry(key).mint_txid, 'in doubt -', e.message, '(kept; resolved next scan)'); continue; }
+      if (e.waiting) { clearSentinel(key); log('PEG-IN', key, 'waits:', e.message); continue; }
       // Ambiguous: the send may already have broadcast. Do NOT delete the sentinel blindly — verify.
       const v = await verifyPeginCredit(key, doneEntry(key));
       if (v.status === 'confirmed') { markDone(key, v.txid); err('PEG-IN', key, 'RPC errored but credit DID broadcast — recorded tx', v.txid); }
@@ -592,6 +672,21 @@ const server = http.createServer(async (req, res) => {
           }
         }
       } catch {}
+      // Who can mint more SBTC: the mint limiter that holds its token, read
+      // from the chain (the coin is followed through spends this bridge did
+      // not make), and whether any token unit sits in this wallet instead.
+      let mintLimiter = null;
+      if (LIMITER) {
+        try {
+          const rec = LIMITER.load();
+          if (rec) await LIMITER.reconcile(rec).catch(() => null);
+          mintLimiter = LIMITER.view(LIMITER.load()) ?? { error: limiterBlocked() };
+          if (rec?.token) {
+            const outside = await seqrpc('listunspent', [0, 9999999, [], true, { asset: rec.token }]);
+            mintLimiter.token_atoms_in_wallet = String(outside.reduce((a, u) => a + Math.round(Number(u.amount) * 1e8), 0));
+          }
+        } catch (e) { mintLimiter = { error: e.message }; }
+      }
       // Name the asset the reserve backs. Anyone publishing proof of reserves
       // needs both halves of the comparison, and a reserve figure on its own
       // does not say what it is meant to cover. Answering it here keeps that in
@@ -599,6 +694,7 @@ const server = http.createServer(async (req, res) => {
       // comparing the reserve against a stale asset after a re-issue or a
       // chain reset, and would report it as fully backed.
       return send(res, 200, { ok: true, pegins: Object.keys(STATE.pegins).length, pegouts: Object.keys(STATE.pegouts).length,
+        mint_limiter: mintLimiter,
         processed: Object.keys(STATE.done).length, reserve_btc: reserve, bridge_sbtc_balance: supply,
         sbtc_asset: SEQ.sbtc_asset ?? null, reserve_addresses: reserveAddrs,
         // What actually guards the reserve, in the operator's own words. A UI
@@ -647,6 +743,7 @@ function main() {
   POLL_MS = Number(CFG.poll_ms || 15000);
   seqrpc = (m, p) => rpc(SEQ.rpc, m, p, SEQ.wallet);
   btcrpc = (m, p) => rpc(BTC.rpc, m, p, BTC.wallet);
+  LIMITER = SEQ.mint_limiter ? new MintLimiter(SEQ.mint_limiter, seqrpc, SEQ.fee_asset) : null;
   saveState = defaultSaveState;
   STATE = loadState();
   server.listen(HTTPCFG.port || 9987, HTTPCFG.host || '127.0.0.1', async () => {
@@ -656,6 +753,15 @@ function main() {
     // completed (or safely re-armed) rather than stuck, and nothing is ever double-actioned.
     await ensureWalletLoaded(SEQ.rpc, SEQ.wallet, 'Sequentia');
     await ensureWalletLoaded(BTC.rpc, BTC.wallet, 'Bitcoin');
+    if (LIMITER) {
+      // SBTC mints only through the limiter. Say where it stands at boot: an
+      // operator who has not moved the token in sees why peg-ins wait.
+      try {
+        const op = (await LIMITER.tool(['key', '--mnemonic-file', SEQ.mint_limiter.operator_mnemonic_file])).key;
+        const rec = LIMITER.load();
+        log('mint limiter: operator key', op, rec?.coin ? '| token in ' + rec.address + ', state ' + JSON.stringify(rec.state) : '| ' + limiterBlocked());
+      } catch (e) { err('mint limiter: cannot run the tool:', e.message, '(peg-ins wait until it runs)'); }
+    }
     try { await reconcileOnBoot(); } catch (e) { err('boot reconcile failed:', e.message); }
     tick();
     setInterval(tick, POLL_MS);
@@ -675,6 +781,7 @@ function __configureForTest(opts = {}) {
   if (opts.seqMinConf !== undefined) SEQ_MIN_CONF = Number(opts.seqMinConf);
   if (opts.btcMinConf !== undefined) BTC_MIN_CONF = Number(opts.btcMinConf);
   REQUIRE_ANCHOR = opts.requireAnchor ?? false;
+  LIMITER = opts.limiter ?? null;
 }
 
 export {

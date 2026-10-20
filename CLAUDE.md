@@ -15,9 +15,11 @@ for BTC. Node and consensus conventions live in the
 
 ## Shape
 
-One Node ES module, `bridge.mjs`, with no runtime dependencies. It orchestrates two node wallets
-over RPC and hand-rolls no crypto: the Sequentia node signs the reissuance and send, and bitcoind
-(holding the reserve multisig descriptor) signs the release via PSBT.
+One Node ES module, `bridge.mjs`, with no runtime dependencies, and `limiter.mjs`, its mint
+limiter. It orchestrates two node wallets over RPC and hand-rolls no crypto: a reissuance is a
+spend of the mint limiter covenant, built and signed by `mint-limiter` from sequentia-contracts,
+with the wallet signing the fee coin; the Sequentia node signs the send, and bitcoind (holding the
+reserve multisig descriptor) signs the release via PSBT.
 
 ```sh
 cp config.example.json config.json     # then fill it in
@@ -27,7 +29,7 @@ npm test         # node --test 'test/**/*.test.mjs'
 ```
 
 `setup-sbtc.mjs` is the one-time setup: it builds the reserve multisig, issues SBTC, and writes
-the config. There is no CI, so `npm test` before every PR is the whole gate.
+the config. `limiter-move.mjs` then moves the SBTC reissuance token into its mint limiter, once. There is no CI, so `npm test` before every PR is the whole gate.
 
 ## The supply invariant
 
@@ -44,6 +46,15 @@ own wallet as float, out of circulation, and spends that float before reissuing 
 peg-in. Circulating SBTC (issued minus `bridge_sbtc_balance` in `/status`) therefore always equals the
 reserve BTC, and total issued supply equals peak circulation. Every rule below exists to protect that
 one equation.
+
+With `seq.mint_limiter` configured, SBTC is reissued only through the mint limiter, never with
+a bare `reissueasset`, and with no limiter record the bridge mints nothing. A limiter mint's txid
+is final before broadcast (the covenant signs every input and output) and goes into the
+credit's pending entry first; the credit is sent only once that mint confirms, because a
+transaction with an input not the wallet's own is untrusted until then. A pending entry with a
+`mint_txid` is never cleared while that mint can still land, and a new mint for the credit spends
+the same limiter coin, so two mints for one credit can never both confirm. The bridge holds only
+the operator key's mnemonic; the cold key never reaches this host.
 
 ## Two failure classes that were closed deliberately
 
@@ -76,7 +87,8 @@ state, and never widen the window between a check and the send it protects.**
 
 ## Secrets
 
-`config.json`, `state.json` and `*.log` are gitignored. `config.example.json` is the template and
+`config.json`, `state.json`, `limiter.json`, mnemonic files (`*.words`, such as the mint
+limiter's operator mnemonic) and `*.log` are gitignored. `config.example.json` is the template and
 carries only placeholders — keep real RPC credentials, the bearer token, the multisig descriptor
 and the asset id out of it. The repository is public.
 

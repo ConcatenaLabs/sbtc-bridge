@@ -3,3 +3,6 @@ config.json
 state.json
 state.json.tmp
 *.log
+*.words
+limiter.json
+limiter.json.tmp

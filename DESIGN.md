@@ -30,9 +30,12 @@ We do **not** enable Elements' native two-way peg (dormant, federation-based, an
 `pegged_asset` is coupled to the policy/subsidy asset). Instead:
 
 - **SBTC is a normal REISSUABLE Sequentia asset**, issued exactly like GOLD/USDX/…, with its
-  **reissuance token held by the bridge's N-of-M multisig**. It is distinct from tSEQ by
-  construction (just another asset id), so the policy-asset coupling never arises, and
-  **there is zero consensus / chainparams change.**
+  **reissuance token held in a mint limiter covenant**
+  ([sequentia-contracts](https://github.com/ConcatenaLabs/sequentia-contracts),
+  `templates/mint_limiter`): the bridge's operator key mints at most an allowance per window of
+  blocks, and the operators' cold key can brake every mint and, after a long delay, recover the
+  token. It is distinct from tSEQ by construction (just another asset id), so the policy-asset
+  coupling never arises, and **there is zero consensus / chainparams change.**
 - The bridge is **no closer to consensus than any third-party bridge** anyone could deploy on
   Sequentia. `has_parent_chain` stays `false`; anchoring is untouched.
 
@@ -42,8 +45,9 @@ A standard **lock-and-issue** bridge with two custody roles, both held by the sa
 **N-of-M operator set** (testnet: we run all N; break-and-fix is fine):
 
 - On **Bitcoin (testnet4):** an N-of-M multisig address holding the reserve BTC.
-- On **Sequentia:** the **reissuance token** for SBTC, so the operators issue SBTC 1:1
-  against the reserve.
+- On **Sequentia:** the **reissuance token** for SBTC, in its mint limiter, so the operators
+  issue SBTC 1:1 against the reserve and no single hot key can issue more than a window's
+  allowance before the brake stops it.
 
 Trust model: users trust the N operators to keep the reserve 1:1 and not abscond or
 over-issue — the same trust as any custodial bridge, and the trust the user accepted in
@@ -144,8 +148,10 @@ user-facing BTC↔SBTC. Do not special-case-block it.
 
 No part of SBTC is consensus code.
 
-- **The bridge service:** `bridge.mjs` in this repository. On the testnet the reserve
-  multisig is 2-of-3, and `GET /status` returns its live descriptor (`reserve_custody`).
+- **The bridge service:** `bridge.mjs` in this repository, which mints through the mint limiter
+  (`limiter.mjs`; the token moves in once with `limiter-move.mjs`). On the testnet the reserve
+  multisig is 2-of-3, and `GET /status` returns its live descriptor (`reserve_custody`) and the
+  mint limiter's state (`mint_limiter`).
 - **SBTC in the wallets**, as an ordinary unprivileged asset with no wrap/unwrap UI of its own:
   the SWK web wallet (`sbtc.js`, and the silent peg in `swap.js`) and Ambra
   (`sbtc_client.dart`, `sbtc_peg_service.dart`).

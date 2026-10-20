@@ -6,7 +6,11 @@ needs no consensus change — it is a standard lock-and-issue bridge, no closer 
 than any third-party bridge.
 
 - **SBTC** is a normal, unprivileged, **reissuable** Sequentia asset pegged 1:1 to the
-  reserve BTC; its reissuance token lives in this bridge's Sequentia wallet.
+  reserve BTC. Its reissuance token sits in a **mint limiter** covenant
+  ([sequentia-contracts](https://github.com/ConcatenaLabs/sequentia-contracts),
+  `templates/mint_limiter`): the bridge's operator key mints at most an allowance per window of
+  blocks, and a cold key that never reaches the bridge host can brake every mint and, after a
+  long delay, take the token back. A leaked operator key cannot mint an unbounded supply.
 - **Reserve BTC** lives in a fixed **N-of-M operator multisig** on Bitcoin (testnet4), held
   as a descriptor wallet in bitcoind. On the testnet the multisig is 2-of-3 and
   `setup-sbtc.mjs` generates all three keys on the bridge host, so today a single operator
@@ -24,7 +28,10 @@ Design: [`DESIGN.md`](DESIGN.md).
 - **Peg-in**: `POST /pegin {seq_recipient}` → a fresh BTC deposit address. Send real BTC there;
   once the deposit has one confirmation **and** Sequentia's Bitcoin anchor has reached the block
   holding it, the bridge sends **SBTC 1:1** to `seq_recipient`, spending its held float first and
-  reissuing only the shortfall. From then on every Sequentia block that can carry the credit is
+  minting only the shortfall. A mint is a spend of the mint limiter, minted to the bridge wallet
+  and recorded before it is broadcast; the credit is sent once it confirms. A peg-in that would
+  take the window over its allowance waits for the next window, and while the limiter is braked
+  every peg-in that needs a mint waits. From then on every Sequentia block that can carry the credit is
   anchored at or above the deposit's block, so a Bitcoin reorg that removes the deposit reorgs the
   credit away with it. An unconfirmed deposit is never credited: a double-spend of it reorgs
   nothing. `btc.min_conf` can raise the one-confirmation floor, never lower it.
@@ -41,7 +48,10 @@ Design: [`DESIGN.md`](DESIGN.md).
   reissued.
 - `GET /status` → `pegins`, `pegouts`, `processed` counts, `reserve_btc`, `bridge_sbtc_balance`,
   `sbtc_asset`, `reserve_addresses` (per-address reserve balances, checkable against any
-  explorer) and `reserve_custody` (the live multisig descriptor).
+  explorer), `reserve_custody` (the live multisig descriptor) and `mint_limiter`: the covenant
+  that holds SBTC's reissuance token (its instance, address, coin and state, the allowance per
+  window, whether it is braked or recovered), followed on chain, and `token_atoms_in_wallet`,
+  which must be zero.
 - `GET /pegin/<deposit_address>` → the bound `seq_recipient` and every BTC deposit to that
   address: amount, confirmations (against `min_conf`), `state` (`waiting`, `in_progress`,
   `done`) and the SBTC `credit_txid` once credited, plus `anchor_height` and `btc_tip`: a
@@ -70,12 +80,34 @@ token empty disables auth entirely, so never do that off localhost.
    pays its own Sequentia fees in; default USDX) and `SBTC_REGISTRY_SEED` (path to the registry
    seed file to patch with the SBTC entry). Re-running reuses an existing asset id and reserve
    wallet. To fill the config by hand instead, start from `config.example.json`.
-2. `npm start` (`node bridge.mjs`). `SBTC_BRIDGE_CONFIG` and `SBTC_BRIDGE_STATE` override the
+2. Move SBTC's reissuance token into its mint limiter, once, with the bridge stopped. Build the
+   tool in a sequentia-contracts checkout
+   (`cargo build --release --manifest-path tools/mint-limiter/Cargo.toml`), make the operator key
+   on this host (`mint-limiter key --new --mnemonic-file limiter-operator.words`), make the cold
+   key on another machine (`mint-limiter key --new` prints its words once; write them down
+   offline), set `seq.mint_limiter` in `config.json` (`tool`, `operator_mnemonic_file`, and
+   `record`, the file the limiter's state is kept in), then:
+   ```sh
+   node limiter-move.mjs --cold-key <cold key> --window <blocks> \
+       --allowance <atoms per window> --recovery-delay <units of 512 s>
+   ```
+   It moves every unit of the token, or none, and refuses to run twice. The cold key signs the
+   brake once, in advance (`mint-limiter arm-signature --instance <instance> --mnemonic-file
+   <cold words>`, the instance being `record`'s `instance`); whoever holds that signature can stop
+   every mint with the tool's `build` (path `arm`), and only the cold key lifts the brake or, after
+   the recovery delay, takes the token (paths `disarm`, `recover`). With `seq.mint_limiter` set and
+   no record, the bridge mints nothing; without `seq.mint_limiter` it reissues from its wallet.
+3. `npm start` (`node bridge.mjs`). `SBTC_BRIDGE_CONFIG` and `SBTC_BRIDGE_STATE` override the
    `config.json` / `state.json` paths. At startup the service loads its two node wallets itself
    when a node has them on disk but not loaded, so a service manager needs to run nothing
    before it, and no RPC credentials ever appear on a command line or in a unit file.
-3. `npm test` runs the unit tests against a mock chain; `npm run check` is a syntax check.
+4. `npm test` runs the unit tests against a mock chain, and, with `SEQUENTIAD` and `MINT_LIMITER`
+   naming the node and the tool, a peg-in suite on a Sequentia regtest node: the token moved into
+   its limiter whole, peg-ins minted through the covenant and credited once, one over the
+   window's allowance credited in the next window, and the brake, applied by another party with
+   the cold key's signature, followed and honoured. `npm run check` is a syntax check.
 
-The bridge orchestrates the two node wallets over RPC and hand-rolls no crypto: the Sequentia
-node signs the reissuance/send, bitcoind (holding the multisig descriptor) signs the reserve
-release via PSBT.
+The bridge orchestrates the two node wallets over RPC and hand-rolls no crypto: a mint is a
+spend of the mint limiter, built and signed by `mint-limiter` (which reaches no node and holds no
+credential) with the bridge wallet signing its fee coin; the Sequentia node signs the send, and
+bitcoind (holding the multisig descriptor) signs the reserve release via PSBT.
