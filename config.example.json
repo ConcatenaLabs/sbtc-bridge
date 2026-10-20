@@ -4,7 +4,12 @@
     "wallet": "sbtc-bridge",
     "sbtc_asset": "SBTC_ASSET_ID_HEX",
     "fee_asset": "2a515539da5e6a60caa7766ecd65bac0c10d15717ddd2088844ba58f4d04b9de",
-    "min_conf": 1
+    "min_conf": 1,
+    "mint_limiter": {
+      "tool": "/path/to/sequentia-contracts/tools/mint-limiter/target/release/mint-limiter",
+      "operator_mnemonic_file": "limiter-operator.words",
+      "record": "limiter.json"
+    }
   },
   "btc": {
     "rpc": "http://USER:PASS@127.0.0.1:48332",
@@ -14,6 +19,10 @@
     "min_conf": 1,
     "fee_sat_vb": 2
   },
-  "http": { "host": "127.0.0.1", "port": 9987, "token": "SET_A_BEARER_TOKEN" },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 9987,
+    "token": "SET_A_BEARER_TOKEN"
+  },
   "poll_ms": 15000
 }
