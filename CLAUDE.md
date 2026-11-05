@@ -25,11 +25,12 @@ reserve multisig descriptor) signs the release via PSBT.
 cp config.example.json config.json     # then fill it in
 npm start        # node bridge.mjs
 npm run check    # node --check bridge.mjs
-npm test         # node --test 'test/**/*.test.mjs'
+npm test         # node --test test/*.test.mjs
 ```
 
 `setup-sbtc.mjs` is the one-time setup: it builds the reserve multisig, issues SBTC, and writes
-the config. `limiter-move.mjs` then moves the SBTC reissuance token into its mint limiter, once. There is no CI, so `npm test` before every PR is the whole gate.
+the config. `limiter-move.mjs` then moves the SBTC reissuance token into its mint limiter, once. CI (`.github/workflows/tests.yml`) runs `npm run check` and `npm test` on every pull request and
+on `master`, on Node 18, the server's.
 
 ## The supply invariant
 
