@@ -1,0 +1,24 @@
+# `npm run check` and `npm test` on every pull request and on master, on Node 18, the Node the
+# testnet server runs the bridge on. The bridge has no dependencies to install.
+#
+# Not run here, by design (README):
+# - SKIPPED (needs a sequentiad and a mint limiter): test/limiter.regtest.test.mjs, which wants
+#   SEQUENTIAD and MINT_LIMITER.
+name: tests
+on:
+  pull_request:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  node-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - run: npm run check
+      - run: npm test
